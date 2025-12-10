@@ -61,8 +61,14 @@ def parse_urdf(morph, surface):
         path = os.path.join(get_assets_dir(), morph.file)
         robot = urdfpy.URDF.load(path)
     else:
-        robot = morph.file
-
+        import pathlib
+        if isinstance(morph.file, pathlib.Path):
+            path = str(morph.file.absolute())
+            robot = urdfpy.URDF.load(path)
+        else:
+            raise TypeError(
+                f"Expected morph.file to be a string or pathlib.Path, got {type(morph.file)}"
+            ) 
     # Merge links connected by fixed joints
     if morph.merge_fixed_links:
         robot = merge_fixed_links(robot, morph.links_to_keep)
@@ -290,6 +296,15 @@ def parse_urdf(morph, surface):
 
         j_info["dofs_kp"] = gu.default_dofs_kp(j_info["n_dofs"])
         j_info["dofs_kv"] = gu.default_dofs_kv(j_info["n_dofs"])
+
+        if j_info['name'] == "rotation":
+           print('WARNING: Special case for the ARCTIC object joints, set damping to 0.0 and armature to 0.0')
+           j_info['dofs_damping'][:] = 0.1
+           j_info['dofs_stiffness'] *= 0.0
+           j_info['dofs_armature'][:] = 0.0
+           j_info['dofs_kp'] *= 0.0
+           j_info['dofs_kv'] *= 0.0
+
         if joint.safety_controller is not None:
             if joint.safety_controller.k_position is not None:
                 j_info["dofs_kp"] = np.tile(joint.safety_controller.k_position, j_info["n_dofs"])

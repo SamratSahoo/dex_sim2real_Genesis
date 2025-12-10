@@ -128,6 +128,7 @@ class VisOptions(Options):
     )
     n_rendered_envs: Optional[int] = None  # number of environments being rendered
     rendered_envs_idx: Optional[list] = None  # idx of environments being rendered
+    visualize_contact: bool = False
     lights: list = [
         {"type": "directional", "dir": (-1, -1, -1), "color": (1.0, 1.0, 1.0), "intensity": 5.0},
     ]

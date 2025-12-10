@@ -1450,7 +1450,7 @@ class StructGeomsInfo(metaclass=BASE_METACLASS):
     coup_friction: V_ANNOTATION
     coup_softness: V_ANNOTATION
     coup_restitution: V_ANNOTATION
-
+    link_idx_local: V_ANNOTATION
 
 def get_geoms_info(solver):
     shape = (solver.n_geoms_,)
@@ -1484,6 +1484,7 @@ def get_geoms_info(solver):
         coup_friction=V(dtype=gs.ti_float, shape=shape),
         coup_softness=V(dtype=gs.ti_float, shape=shape),
         coup_restitution=V(dtype=gs.ti_float, shape=shape),
+        link_idx_local=V(dtype=gs.ti_int, shape=shape),
     )
 
 
@@ -1654,6 +1655,7 @@ class StructVgeomsInfo(metaclass=BASE_METACLASS):
     vface_start: V_ANNOTATION
     vface_end: V_ANNOTATION
     color: V_ANNOTATION
+    link_idx_local: V_ANNOTATION
 
 
 def get_vgeoms_info(solver):
@@ -1670,6 +1672,7 @@ def get_vgeoms_info(solver):
         vface_start=V(dtype=gs.ti_int, shape=shape),
         vface_end=V(dtype=gs.ti_int, shape=shape),
         color=V(dtype=gs.ti_vec4, shape=shape),
+        link_idx_local=V(dtype=gs.ti_int, shape=shape),
     )
 
 

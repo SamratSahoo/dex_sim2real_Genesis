@@ -91,6 +91,7 @@ class RigidSolver(Solver):
         self._enable_mujoco_compatibility = options.enable_mujoco_compatibility
         self._enable_joint_limit = options.enable_joint_limit
         self._enable_self_collision = options.enable_self_collision
+        self._self_collision_group_filter = options.self_collision_group_filter
         self._enable_adjacent_collision = options.enable_adjacent_collision
         self._disable_constraint = options.disable_constraint
         self._max_collision_pairs = options.max_collision_pairs
@@ -725,6 +726,7 @@ class RigidSolver(Solver):
                 geoms_coup_softness=np.array([geom.coup_softness for geom in geoms], dtype=gs.np_float),
                 geoms_coup_friction=np.array([geom.coup_friction for geom in geoms], dtype=gs.np_float),
                 geoms_coup_restitution=np.array([geom.coup_restitution for geom in geoms], dtype=gs.np_float),
+                geoms_link_idx_local=np.array([geom.link.idx_local for geom in geoms], dtype=gs.np_int),
                 geoms_is_fixed=np.array([geom.is_fixed for geom in geoms], dtype=gs.np_bool),
                 geoms_is_decomp=np.array([geom.metadata.get("decomposed", False) for geom in geoms], dtype=gs.np_bool),
                 # taichi variables
@@ -751,6 +753,7 @@ class RigidSolver(Solver):
                 vgeoms_vvert_end=np.array([vgeom.vvert_end for vgeom in vgeoms], dtype=gs.np_int),
                 vgeoms_vface_end=np.array([vgeom.vface_end for vgeom in vgeoms], dtype=gs.np_int),
                 vgeoms_color=np.array([vgeom._color for vgeom in vgeoms], dtype=gs.np_float),
+                vgeoms_link_idx_local=np.array([vgeom.link.idx_local for vgeom in vgeoms], dtype=gs.np_int),
                 # taichi variables
                 vgeoms_info=self.vgeoms_info,
                 static_rigid_sim_config=self._static_rigid_sim_config,
@@ -1890,6 +1893,28 @@ class RigidSolver(Solver):
             equalities_info=self.equalities_info,
             static_rigid_sim_config=self._static_rigid_sim_config,
         )
+
+    def set_geom_sol_params(self, sol_params):
+        assert len(sol_params) == 7
+        self._kernel_set_geom_sol_params(sol_params)
+    
+    @ti.kernel
+    def _kernel_set_geom_sol_params(self, sol_params: ti.types.ndarray()):
+        ti.loop_config(serialize=self._para_level < gs.PARA_LEVEL.PARTIAL)
+        for i in range(self.n_geoms):
+            for j in ti.static(range(7)):
+                self.geoms_info[i].sol_params[j] = sol_params[j]
+
+    @ti.kernel
+    def _kernel_set_gravity(self, gravity: ti.types.ndarray()):
+        ti.loop_config(serialize=self._para_level < gs.PARA_LEVEL.ALL)
+        for i in ti.static(range(3)):
+            self._gravity[i] = gravity[i]
+    
+    def set_gravity(self, gravity_tuple):
+        assert len(gravity_tuple) == 3
+        self._gravity.fill(gravity_tuple) # type is <class 'taichi.lang.matrix.MatrixField'>
+        # self._kernel_set_gravity(gravity)
 
     def _set_dofs_info(self, tensor_list, dofs_idx, name, envs_idx=None):
         if gs.use_zerocopy and name in {"kp", "kv", "force_range", "stiffness", "damping", "frictionloss", "limit"}:
@@ -3090,6 +3115,7 @@ def kernel_init_geom_fields(
     geoms_coup_softness: ti.types.ndarray(),
     geoms_coup_friction: ti.types.ndarray(),
     geoms_coup_restitution: ti.types.ndarray(),
+    geoms_link_idx_local: ti.types.ndarray(),
     geoms_is_fixed: ti.types.ndarray(),
     geoms_is_decomp: ti.types.ndarray(),
     # taichi variables
@@ -3141,6 +3167,7 @@ def kernel_init_geom_fields(
         geoms_info.coup_softness[i_g] = geoms_coup_softness[i_g]
         geoms_info.coup_friction[i_g] = geoms_coup_friction[i_g]
         geoms_info.coup_restitution[i_g] = geoms_coup_restitution[i_g]
+        geoms_info.link_idx_local[i_g] = geoms_link_idx_local[i_g]
 
         geoms_info.is_fixed[i_g] = geoms_is_fixed[i_g]
         geoms_info.is_decomposed[i_g] = geoms_is_decomp[i_g]
@@ -3200,6 +3227,7 @@ def kernel_init_vgeom_fields(
     vgeoms_vvert_end: ti.types.ndarray(),
     vgeoms_vface_end: ti.types.ndarray(),
     vgeoms_color: ti.types.ndarray(),
+    vgeoms_link_idx_local: ti.types.ndarray(),
     # taichi variables
     vgeoms_info: array_class.VGeomsInfo,
     static_rigid_sim_config: ti.template(),
@@ -3222,6 +3250,7 @@ def kernel_init_vgeom_fields(
         vgeoms_info.vface_num[i_vg] = vgeoms_vface_end[i_vg] - vgeoms_vface_start[i_vg]
 
         vgeoms_info.link_idx[i_vg] = vgeoms_link_idx[i_vg]
+        vgeoms_info.link_idx_local[i_vg] = vgeoms_link_idx_local[i_vg]
         for j in ti.static(range(4)):
             vgeoms_info.color[i_vg][j] = vgeoms_color[i_vg, j]
 

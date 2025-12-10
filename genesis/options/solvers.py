@@ -397,8 +397,10 @@ class RigidOptions(Options):
     max_dynamic_constraints: int = 8
 
     # Experimental options mainly intended for debug purpose and unit tests
-    enable_multi_contact: bool = True
+    enable_multi_contact: bool = False
     enable_mujoco_compatibility: bool = False
+    link_group_mapping: Optional[dict] = None
+    self_collision_group_filter: bool = False
 
     # GJK collision detection
     use_gjk_collision: Optional[bool] = None

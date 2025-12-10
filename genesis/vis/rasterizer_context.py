@@ -73,6 +73,63 @@ class SegmentationColorMap:
         else:
             self.idxc_to_color = rgb
 
+@torch.jit.script
+def get_expanded_mask(n_contacts, pair_a, pair_b, a_idxs, b_idxs):
+    """ 
+    Input:
+    - pair_a: (n_contacts, N) tensor of geom indices for entity A
+    - pair_b: (n_contacts, N) tensor of geom indices for entity B
+    - a_idxs: (n_a,) tensor of geom indices to filter for entity A
+    - b_idxs: (n_b,) tensor of geom indices to filter for entity B
+    Output:
+    - mask: (n_contacts, N, n_a, n_b) tensor of expanded mask. Use this to filter contacts
+    
+    Note that we need to flip the mask for both pairs 
+    """
+    pair_a[n_contacts.unsqueeze(0) <= torch.arange(pair_a.shape[0], device=pair_a.device).view(-1, 1)] = -3 
+    pair_b[n_contacts.unsqueeze(0) <= torch.arange(pair_b.shape[0], device=pair_b.device).view(-1, 1)] = -3
+
+    assert a_idxs.ndim == 1 and b_idxs.ndim == 1, "a_idxs and b_idxs should be 1D tensors"
+    mask_a = pair_a.unsqueeze(-1) == a_idxs.view(1, 1, -1)
+    mask_b = pair_b.unsqueeze(-1) == b_idxs.view(1, 1, -1)
+    mask = torch.logical_and(mask_a.unsqueeze(-1), mask_b.unsqueeze(-2))
+    mask_a_flip = pair_a.unsqueeze(-1) == b_idxs.view(1, 1, -1)
+    mask_b_flip = pair_b.unsqueeze(-1) == a_idxs.view(1, 1, -1)
+    mask_flip = torch.logical_and(mask_a_flip.unsqueeze(-1), mask_b_flip.unsqueeze(-2))
+
+    mask = torch.logical_or(mask, mask_flip.transpose(-1, -2)) 
+    return mask 
+
+@torch.jit.script
+def get_grouped_contact_pos(contact_pos, contact_force_norm, mask):
+    """
+    Get the contact positions from the mask, this groups the contact positions by geom/link in entity A and all the valid contacts with entity B
+    Input: 
+    - contact_pos: (n_contacts, N, 3) tensor of contact positions
+    - contact_force_norm: (n_contacts, N) tensor of contact force norms
+    - mask: (n_contacts, N, n_a, n_b) tensor of expanded mask
+    Return:
+    - grouped_contact_pos: (N, n_a, n_b, 3) tensor of contact positions
+    - grouped_contact_pos_valid: (N, n_a, n_b) tensor of valid contact positions
+    """
+    device = contact_pos.device  
+    contact_force_norm = contact_force_norm.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+    pos_expanded = contact_pos.unsqueeze(-2).unsqueeze(-2) # (n_contacts, N, 1, 1, 3)
+    pos_masked = pos_expanded * mask.unsqueeze(-1)  # Mask invalid positions -> (n_contacts, N, n_a, n_b, 3)
+    weightd_pos = pos_expanded * contact_force_norm  # (n_contacts, N, 1, 1, 3)
+    weighted_pos_masked = weightd_pos * mask.unsqueeze(-1)  # Mask invalid positions -> (n_contacts, N, n_a, n_b, 3)
+    # Sum weighted positions and contact forces across all contacts (dim=0)
+    weighted_sum = torch.sum(weighted_pos_masked, dim=0)  # (N, n_a, n_b, 3)
+    force_sum = torch.sum(contact_force_norm * mask.unsqueeze(-1), dim=0)  # (N, n_a, n_b, 1)
+    # Compute the weighted average (avoid division by zero)
+    grouped_contact_pos = torch.where(
+        force_sum > 0,
+        weighted_sum / force_sum,
+        torch.zeros_like(weighted_sum)
+    )
+    # Compute validity (at least one valid contact)
+    grouped_contact_pos_valid = (force_sum > 0).squeeze(-1) # (N, n_a, n_b)
+    return grouped_contact_pos, grouped_contact_pos_valid
 
 class RasterizerContext:
     def __init__(self, options):
@@ -95,6 +152,7 @@ class RasterizerContext:
         self.render_particle_as = options.render_particle_as
         self.rendered_envs_idx = options.rendered_envs_idx
         self.env_separate_rigid = options.env_separate_rigid
+        self.visualize_contact = options.visualize_contact
 
         self.buffer = dict()
         self._external_node_buffer = dict()
@@ -1025,7 +1083,8 @@ class RasterizerContext:
         self.update_link_frame(self.buffer)
         self.update_tool(self.buffer)
         self.update_rigid(self.buffer)
-        self.update_contact(self.buffer)
+        if self.visualize_contact:
+            self.update_contact(self.buffer)
         self.update_avatar(self.buffer)
         self.update_mpm(self.buffer)
         self.update_sph(self.buffer)

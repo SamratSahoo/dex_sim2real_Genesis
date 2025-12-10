@@ -77,6 +77,28 @@ class Collider:
         # Make sure that the initial state is clean
         self.clear()
 
+    def _init_link_group_mapping(self):
+        max_link_id = self._solver.n_links - 1
+        if self._solver._options.batch_links_info:
+            n_envs = self._solver._n_envs
+            self._link_group_field = ti.field(ti.i32, shape=(max_link_id + 1, n_envs))
+            if self._solver._options.link_group_mapping is not None:
+                for i_link, group in self._solver._options.link_group_mapping.items():
+                    for i_env in range(n_envs):
+                        self._link_group_field[i_link, i_env] = group
+            else:
+                for i_link in range(max_link_id + 1):
+                    for i_env in range(n_envs):
+                        self._link_group_field[i_link, i_env] = i_link
+        else:
+            self._link_group_field = ti.field(ti.i32, shape=max_link_id + 1)
+            if self._solver._options.link_group_mapping is not None:
+                for i_link, group in self._solver._options.link_group_mapping.items():
+                    self._link_group_field[i_link] = group
+            else:
+                for i_link in range(max_link_id + 1):
+                    self._link_group_field[i_link] = i_link
+
     def _init_static_config(self) -> None:
         # Identify the convex collision detection (ccd) algorithm
         if self._solver._options.use_gjk_collision:
@@ -201,6 +223,7 @@ class Collider:
         links_root_idx = solver.links_info.root_idx.to_numpy()
         links_parent_idx = solver.links_info.parent_idx.to_numpy()
         links_is_fixed = solver.links_info.is_fixed.to_numpy()
+        self._init_link_group_mapping()
         if batch_links_info:
             links_entity_idx = links_entity_idx[:, 0]
             links_root_idx = links_root_idx[:, 0]
@@ -209,7 +232,18 @@ class Collider:
         entities_is_local_collision_mask = solver.entities_info.is_local_collision_mask.to_numpy()
 
         n_possible_pairs = 0
+        cull_self_collision = 0
+        cull_same_link = 0
+        cull_adjacent_links = 0
+        cull_self_collision_group_filter = 0
+        cull_fixed_links = 0
+        cull_geom_contype = 0
+        collision_pair_validity = np.zeros((n_geoms, n_geoms), dtype=gs.np_int)
+        total_geoms = 0
+
         collision_pair_idx = np.full((n_geoms, n_geoms), fill_value=-1, dtype=gs.np_int)
+        if self._solver._self_collision_group_filter:
+            geom_global_link_idx = self._solver.geoms_info.link_idx_local.to_numpy()
         for i_ga in range(n_geoms):
             for i_gb in range(i_ga + 1, n_geoms):
                 i_la = geoms_link_idx[i_ga]
@@ -219,17 +253,20 @@ class Collider:
 
                 # geoms in the same link
                 if i_la == i_lb:
+                    cull_same_link += 1
                     continue
 
                 # self collision
                 if links_root_idx[i_la] == links_root_idx[i_lb]:
                     if not enable_self_collision:
+                        cull_self_collision += 1
                         continue
 
                     # adjacent links
                     if not enable_adjacent_collision and (
                         links_parent_idx[i_la] == i_lb or links_parent_idx[i_lb] == i_la
                     ):
+                        cull_adjacent_links += 1
                         continue
 
                 # Filter out right away weld constraint that have been declared statically and cannot be removed
@@ -249,15 +286,28 @@ class Collider:
                 ) and not (
                     (geoms_contype[i_ga] & geoms_conaffinity[i_gb]) or (geoms_contype[i_gb] & geoms_conaffinity[i_ga])
                 ):
+                    cull_geom_contype += 1
                     continue
 
                 # pair of fixed links wrt the world
                 if links_is_fixed[i_la] and links_is_fixed[i_lb]:
+                    cull_fixed_links += 1
                     continue
+
+                if self._solver._self_collision_group_filter:
+                    i_la_loc = geom_global_link_idx[i_ga]
+                    i_lb_loc = geom_global_link_idx[i_gb]
+                    # if a geom's group is not specified, check collision 
+                    if i_la_loc in self._solver._options.link_group_mapping and i_lb_loc in self._solver._options.link_group_mapping:
+                        if self._solver._options.link_group_mapping[i_la_loc] == self._solver._options.link_group_mapping[i_lb_loc]:
+                            cull_self_collision_group_filter += 1
+                            continue
 
                 collision_pair_idx[i_ga, i_gb] = n_possible_pairs
                 n_possible_pairs += 1
 
+        print(f"n_possible_pairs: {n_possible_pairs}, cull_geom_contype: {cull_geom_contype}, cull_self_collision: {cull_self_collision}, cull_same_link: {cull_same_link}, cull_adjacent_links: {cull_adjacent_links}, cull_self_collision_group_filter: {cull_self_collision_group_filter}, cull_fixed_links: {cull_fixed_links}")
+        print(f"total geoms: {total_geoms}")
         return n_possible_pairs, collision_pair_idx
 
     def _compute_verts_connectivity(self):
