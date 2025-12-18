@@ -461,8 +461,8 @@ class RigidEntity(Entity):
             links_j_infos[root_idx] = [j_info]
 
             # Rename root link for clarity if relevant
-            if root_idx == 0:
-                l_infos[root_idx]["name"] = "base"
+            # if root_idx == 0:
+            #     l_infos[root_idx]["name"] = "base"
 
             # Shift root idx for all child links and replace root if no longer fixed wrt world
             for i_l in range(root_idx, len(l_infos)):
